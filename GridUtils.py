@@ -38,12 +38,12 @@ def add_latlon_metrics(dset, dims=None):
     
     if dims is None:
         for dim in dimXList:
-            if dim in dset:
+            if dim in dset or dim in dset.coords:
                 lon = dim
                 break
 
         for dim in dimYList:
-            if dim in dset:
+            if dim in dset or dim in dset.coords:
                 lat = dim
                 break
 

@@ -7,10 +7,10 @@ Copyright 2018. All rights reserved. Use is subject to license terms.
 """
 import numpy as np
 import xarray as xr
-from utils.ArrayUtils import interp1d
-from utils.ConstUtils import Re
+from GeoApps.ArrayUtils import interp1d
+from GeoApps.ConstUtils import Re
 from abc import ABCMeta, abstractmethod
-from utils.Application import Application
+from GeoApps.Application import Application
 
 
 class ContourAnalysis(Application):
@@ -28,14 +28,17 @@ class ContourAnalysis(Application):
         ----------
         dset : xarray.Dataset
             a given Dataset containing MITgcm output diagnostics
-        trcr : str
+        trcr : str or xarray.DataArray
             a given string indicating the tracer in Dataset
         grid : xgcm.Grid
             a given grid that accounted for grid metrics
         """
         super(ContourAnalysis, self).__init__(dset, grid=grid)
         
-        self.tracer = dset[trcr]
+        if isinstance(trcr, str):
+            trcr = dset[trcr]
+        
+        self.tracer = trcr
 
 
     def cal_contours(self, levels=10, dims=None, increasing=True):
@@ -99,7 +102,8 @@ class ContourAnalysis(Application):
         return ctr
 
 
-    def cal_integral_within_contours(self, contour, var=None, name=None, lt=True):
+    def cal_integral_within_contours(self, contour, var=None,
+                                     out_name=None, lt=True):
         """
         Calculate masked variable using pre-calculated tracer contours.
 
@@ -110,7 +114,7 @@ class ContourAnalysis(Application):
         var  : xarray.DataArray
             A given variable in dset.  If None, area enclosed by contour
             will be calculated and returned
-        name : str
+        out_name : str
             A given name for the returned variable.
         lt : boolean
             less than the given contour or greater than.
@@ -124,17 +128,17 @@ class ContourAnalysis(Application):
         if var is None:
             var = self.tracer - self.tracer + 1
         
-        if name is None:
+        if out_name is None:
             if var is None:
-                name = 'area'
+                out_name = 'area'
             else:
-                name = 'int' + var.name
+                out_name = 'int' + var.name
         if lt:
             mskVar = var.where(self.tracer < contour)
         else:
             mskVar = var.where(self.tracer > contour)
 
-        intVar = self.grid.integrate(mskVar, ['X','Y']).rename(name)
+        intVar = self.grid.integrate(mskVar, ['X','Y']).rename(out_name)
 
         return intVar
 
