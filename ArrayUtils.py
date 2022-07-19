@@ -8,7 +8,7 @@ Copyright 2018. All rights reserved. Use is subject to license terms.
 import numpy as np
 
 
-def interp1d(x, xf, yf, inc=True):
+def interp1d(x, xf, yf, inc=True, outside=None):
     """
     Wrapper of np.interp, taking into account the decreasing case.
 
@@ -28,13 +28,14 @@ def interp1d(x, xf, yf, inc=True):
     y : float or complex (corresponding to fp) or ndarray
         The interpolated values, same shape as `x`.
     """
-#    print(f"x: {x} \n xf: {xf.shape} \n yf: {yf.shape}")
-
+    # print(f"x : {x.shape} \nxf: {xf.shape} \nyf: {yf.shape}")
     if inc: # increasing case
         re = np.interp(x, xf, yf)
     else: # decreasing case
+        # print(f"x: {x} \n xf: {xf} \n yf: {yf}")
         re = np.interp(x, xf[::-1], yf[::-1])
 
     # print(f"x: {x} \n xf: {xf} \n yf: {yf} \n y: {re}")
 
     return re
+

@@ -12,10 +12,10 @@ import numpy as np
 Here defines all the constants that are commonly used in earth sciences
 '''
 # Radius of the Earth (m)
-Re = 6371200.0
+Rearth = 6371200.0
 
 # distance of unit degree at the equator
-deg2m = 2.0 * np.pi * Re / 360.0
+deg2m = 2.0 * np.pi * Rearth / 360.0
 
 # Gravitational acceleration g (m s^-2)
 g = 9.80665

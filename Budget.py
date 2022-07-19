@@ -30,7 +30,7 @@ class Budget(Application):
         terms : xarray.Dataset
             A Dataset containing all budget terms
         """
-        super(Budget, self).__init__(dset, grid=grid)
+        super().__init__(dset, grid=grid)
         
 
 
@@ -54,11 +54,12 @@ class Budget(Application):
             heat, salt, and passive tracer along z-dimension.
         """
         grid = self.grid
+        BC   = self.BC
         
         # difference to get flux convergence, sign convention is opposite for z
-        adv_x_tdc = -grid.diff(ADVx, 'X', boundary='fill').rename('adv_x_tdc')
-        adv_y_tdc = -grid.diff(ADVy, 'Y', boundary='fill').rename('adv_y_tdc')
-        adv_r_tdc =  grid.diff(ADVr, 'Z', boundary='fill').rename('adv_r_tdc')
+        adv_x_tdc = -grid.diff(ADVx, 'X', boundary=BC['X']).rename('adv_x_tdc')
+        adv_y_tdc = -grid.diff(ADVy, 'Y', boundary=BC['Y']).rename('adv_y_tdc')
+        adv_r_tdc =  grid.diff(ADVr, 'Z', boundary=BC['Z']).rename('adv_r_tdc')
 
         # change unit to K/day
         adv_x_tdc *= 86400 / self.volume
@@ -116,7 +117,7 @@ class TracerBudget(Budget):
         terms : xarray.Dataset
             A Dataset containing all budget terms
         """
-        super(TracerBudget, self).__init__(dset, grid)
+        super().__init__(dset, grid)
         
         self.volume = dset.drF * dset.hFacC * dset.rA
 
@@ -144,12 +145,13 @@ class TracerBudget(Budget):
             heat, salt, and passive tracer along z-dimension.
         """
         grid = self.grid
+        BC   = self.BC
         
         # difference to get flux convergence, sign convention is opposite for z
-        dffxE_tdc = -grid.diff(DFxE, 'X', boundary='fill').rename('dffxE_tdc')
-        dffyE_tdc = -grid.diff(DFyE, 'Y', boundary='fill').rename('dffyE_tdc')
-        dffrE_tdc =  grid.diff(DFrE, 'Z', boundary='fill').rename('dffrE_tdc')
-        dffrI_tdc =  grid.diff(DFrI, 'Z', boundary='fill').rename('dffrI_tdc')
+        dffxE_tdc = -grid.diff(DFxE, 'X', boundary=BC['X']).rename('dffxE_tdc')
+        dffyE_tdc = -grid.diff(DFyE, 'Y', boundary=BC['Y']).rename('dffyE_tdc')
+        dffrE_tdc =  grid.diff(DFrE, 'Z', boundary=BC['Z']).rename('dffrE_tdc')
+        dffrI_tdc =  grid.diff(DFrI, 'Z', boundary=BC['Z']).rename('dffrI_tdc')
 
         # change unit to K/day
         dffxE_tdc *= 86400 / self.volume
@@ -262,7 +264,7 @@ class HeatBudget(TracerBudget):
         grid : xgcm.Grid
             A given grid that accounted for grid metrics
         """
-        super(HeatBudget, self).__init__(dset, grid)
+        super().__init__(dset, grid)
 
 
     """
@@ -293,7 +295,8 @@ class HeatBudget(TracerBudget):
                              join='left')
         swdown    = swdown.fillna(0)
 
-        Qsflx_tdc = -self.grid.diff(swdown, 'Z', boundary='fill').fillna(0.)\
+        Qsflx_tdc = -self.grid.diff(swdown, 'Z',
+                                    boundary=self.BC['Z']).fillna(0.) \
                     .transpose('time','Z','YC','XC').rename('Qsflx_tdc')
 
         #Qtflx_tdc = self.__surface_to_3d(Qtflx).rename('Qtflx_Ttdc')
@@ -364,7 +367,7 @@ class SaltBudget(TracerBudget):
         grid : xgcm.Grid
             A given grid that accounted for grid metrics
         """
-        super(SaltBudget, self).__init__(dset, grid)
+        super().__init__(dset, grid)
 
 
     """
@@ -414,7 +417,7 @@ class MomentumBudget(Budget):
         terms : xarray.Dataset
             A Dataset containing all budget terms
         """
-        super(MomentumBudget, self).__init__(dset, grid)
+        super().__init__(dset, grid)
         
         if   var == 'U':
             self.volume = dset.drF * dset.hFacW * dset.rAw
@@ -469,14 +472,14 @@ class MomentumBudget(Budget):
         grid = self.grid
         
         # change unit to m/s/day
-        viscE_tdc = Diss * 86400
+        viscE_tdc = (Diss * 86400).rename('viscE_tdc')
 
         # get a copy
         visco_tdc = viscE_tdc[:].rename('visco_tdc')
         
         # difference to get flux convergence, sign convention is opposite for z
         if VISrI is not None:
-            viscI_tdc = grid.diff(VISrI, 'Z', boundary='fill'
+            viscI_tdc = grid.diff(VISrI, 'Z', boundary=self.BC['Z']
                                   ).rename('viscI_tdc')
             viscI_tdc *= 86400 / self.volume
             
@@ -490,7 +493,58 @@ class MomentumBudget(Budget):
         
         if VISrI is not None:
             self.terms['viscI_tdc'] = viscI_tdc
-            
+    
+    def calM_viscous_tendency(self, UVEL, VVEL, visH, vis4):
+        """
+        Calculate tendency due to explicit viscosity manually (using u, v, w).
+        Taking the 3D divergence of viscous fluxes.
+        
+        Parameters
+        ----------
+        UVEL : xarray.DataArray
+            Zonal velocity.
+        VVEL : xarray.DataArray
+            Meridional velocity.
+        visH : float
+            A constant horizontal viscosity.
+        vis4 : float
+            A constant horizontal biharmonic viscosity.
+        """
+        # if not self.hydro:
+        #     raise Exception('nonhydro unsupported')
+        
+        # local variables
+        diff   = self.grid.diff
+        coords = self.coords
+        
+        from GeoApps.DiagnosticMethods import Dynamics
+        
+        dm = Dynamics(self.dset, self.grid)
+        
+        div = dm.cal_horizontal_divergence(UVEL, VVEL)
+        vor = dm.cal_vertical_vorticity(UVEL, VVEL)
+        lpU = dm.cal_Laplacian(UVEL)
+        lpV = dm.cal_Laplacian(VVEL)
+        
+        Dst = self.__cal_Dstar(lpU, lpV)
+        Zst = self.__cal_Zstar(lpU, lpV)
+        
+        bracket1 =  visH * div - vis4 * Dst
+        bracket2 = (visH * vor - vis4 * Zst) * coords.hFacZ
+        
+        visD2_tdc = diff(bracket1, 'X',
+                     boundary=self.BC['X']) / coords.dxC - \
+                diff(bracket2, 'Y',
+                     boundary=self.BC['Y']) / coords.dyG / coords.hFacW
+        
+        visD2_tdc *= 86400
+        
+        visD2_tdc = visD2_tdc.rename('visD2_tdc')
+        
+        if self.terms is not None:
+            self.terms['visD2_tdc'] = visD2_tdc
+        else:
+            self.terms = xr.merge([visD2_tdc])
 
     def cal_pressure_gradX_tendency(self, dPHdx, dNPdx, PHI_SURF):
         """
@@ -511,7 +565,7 @@ class MomentumBudget(Budget):
         pGrdx_tdc = hydrx_tdc[:].rename('pGrdx_tdc')
         
         if PHI_SURF is not None:
-            phisx_tdc = -((self.grid.diff(PHI_SURF, 'X', boundary=self.BCx))
+            phisx_tdc = -((self.grid.diff(PHI_SURF, 'X',boundary=self.BC['X']))
                          / self.coords.dxC * 86400).rename('phisx_tdc')
             pGrdx_tdc += phisx_tdc
         
@@ -551,7 +605,7 @@ class MomentumBudget(Budget):
         pGrdy_tdc = hydry_tdc[:].rename('pGrdy_tdc')
         
         if PHI_SURF is not None:
-            phisy_tdc = -((self.grid.diff(PHI_SURF, 'Y', boundary=self.BCy))
+            phisy_tdc = -((self.grid.diff(PHI_SURF, 'Y', boundary=self.BC['Y']))
                          / self.coords.dyC * 86400).rename('phisy_tdc')
             pGrdy_tdc += phisy_tdc
         
@@ -607,6 +661,54 @@ class MomentumBudget(Budget):
             self.terms = xr.merge([Exter_tdc])
 
 
+    """
+    Helper (private) methods are defined below
+    """
+    def __cal_Dstar(self, lapU, lapV):
+        """
+        Calculate D_star defined at here:
+        https://mitgcm.readthedocs.io/en/latest/algorithm/algorithm.html#horizontal-dissipation
+        
+        Parameters
+        ----------
+        lapU : xarray.DataArray
+            laplacian of u.
+        lapV : xarray.DataArray
+            laplacian of v.
+        """
+        # local variables
+        diff   = self.grid.diff
+        coords = self.coords
+        
+        Dstar = (diff(lapU * coords.hFacW * coords.dyG,
+                      'X', boundary=self.BC['X']) +
+                 diff(lapV * coords.hFacS * coords.dxG,
+                      'Y', boundary=self.BC['Y'])) / coords.hFacC / coords.rA
+     
+        return Dstar
+    
+    def __cal_Zstar(self, lapU, lapV):
+        """
+        Calculate zeta_star defined at here:
+        https://mitgcm.readthedocs.io/en/latest/algorithm/algorithm.html#horizontal-dissipation
+        
+        Parameters
+        ----------
+        lapU : xarray.DataArray
+            laplacian of u.
+        lapV : xarray.DataArray
+            laplacian of v.
+        """
+        # local variables
+        diff   = self.grid.diff
+        coords = self.coords
+        
+        Zstar = (diff(lapV * coords.dyC, 'X', boundary=self.BC['X']) +
+                 diff(lapU * coords.dxC, 'Y', boundary=self.BC['Y'])) / coords.rAz
+     
+        return Zstar
+
+
 
 class EnergyBudget(TracerBudget):
     """
@@ -626,7 +728,7 @@ class EnergyBudget(TracerBudget):
             Hydrostatic or nonhydrostatic budget.  Nonhydrostatc includes
             WVEL-related terms
         """
-        super(EnergyBudget, self).__init__(dset, grid)
+        super().__init__(dset, grid)
         
         self.hydro = hydrostatic
 
@@ -649,15 +751,17 @@ class EnergyBudget(TracerBudget):
         """
         coords = self.coords
         interp = self.grid.interp
-
+        
         # interpolate to get tracer-point energy
-        KE = ((interp(UVEL * coords.hFacW, 'X', boundary=self.BCx) **2 +
-               interp(VVEL * coords.hFacS, 'Y', boundary=self.BCy) **2
-             ) * 0.5).rename('KE')
-
+        KE = (interp(UVEL * coords.hFacW, 'X', boundary=self.BC['X']) **2 +
+              interp(VVEL * coords.hFacS, 'Y', boundary=self.BC['Y']) **2)
+        KE *= 0.5
+        KE = KE.rename('KE')
+        
         if not self.hydro:
-            KE += ((interp(WVEL * coords.hFacC, 'Z', boundary='fill')**2)* 0.5)
-
+            KE += interp(WVEL * coords.hFacC,
+                         'Z', boundary=self.BC['Z']) **2 * 0.5
+        
         if self.terms is not None:
             self.terms['KE'] = KE
         else:
@@ -675,17 +779,18 @@ class EnergyBudget(TracerBudget):
             Kinetic energy.
         """
         # get MITgcm diagnostics
-        Tdc = KE.diff('time')
+        total_tdc = KE.diff('time')
 
         # calculate the true tendency (energy/day)
-        total_tdc = Tdc / deltaT * 86400
+        total_tdc *= 86400 / deltaT
+        total_tdc = total_tdc.rename('total_tdc')
 
         if self.terms is not None:
             self.terms['total_tdc'] = total_tdc
         else:
             self.terms = xr.merge([total_tdc])
 
-    def cal_advection_tendency(self, UVEL, VVEL, WVEL, KE):
+    def cal_advection_tendency(self, KE, UVEL=None, VVEL=None, WVEL=None):
         """
         Calculate tendency due to advection.
         
@@ -701,23 +806,22 @@ class EnergyBudget(TracerBudget):
         # get MITgcm diagnostics
         grid   = self.grid
         coords = self.coords
+        BC     = self.BC
 
         # interpolate to velocity points
-        KE_u = grid.interp(KE, 'X', boundary=self.BCx)
-        KE_v = grid.interp(KE, 'Y', boundary=self.BCy)
-        KE_w = grid.interp(KE, 'Z', boundary='fill'  )
+        KE_u = grid.interp(KE, 'X', boundary=BC['X'])
+        KE_v = grid.interp(KE, 'Y', boundary=BC['Y'])
+        KE_w = grid.interp(KE, 'Z', boundary=BC['Z'])
         
         # calculate the fluxes
         ADVx = UVEL * KE_u * coords.dyG * coords.hFacW * coords.drF
         ADVy = VVEL * KE_v * coords.dxG * coords.hFacS * coords.drF
         ADVr = WVEL * KE_w * coords.rA
-
-        # difference to get flux convergence, sign convention is opposite for z
-        adv_x_tdc =-grid.diff(ADVx, 'X', boundary=self.BCx).rename('adv_x_tdc')
-        adv_y_tdc =-grid.diff(ADVy, 'Y', boundary=self.BCy).rename('adv_y_tdc')
-        adv_r_tdc = grid.diff(ADVr, 'Z', boundary='fill'  ).rename('adv_r_tdc')
-
-        # change unit to energy/day
+        
+        adv_x_tdc =-grid.diff(ADVx, 'X', boundary=BC['X']).rename('adv_x_tdc')
+        adv_y_tdc =-grid.diff(ADVy, 'Y', boundary=BC['Y']).rename('adv_y_tdc')
+        adv_r_tdc = grid.diff(ADVr, 'Z', boundary=BC['Z']).rename('adv_r_tdc')
+        
         adv_x_tdc = adv_x_tdc * 86400 / self.volume
         adv_y_tdc = adv_y_tdc * 86400 / self.volume
         adv_r_tdc = adv_r_tdc * 86400 / self.volume
@@ -750,14 +854,15 @@ class EnergyBudget(TracerBudget):
         """
         # get MITgcm diagnostics
         grid = self.grid
+        BC     = self.BC
 
         # calculate gradient
-        eu = UVEL * -grid.derivative(PHI_SURF, 'X', boundary=self.BCx)
-        ev = VVEL * -grid.derivative(PHI_SURF, 'Y', boundary=self.BCy)
+        eu = UVEL * -grid.derivative(PHI_SURF, 'X', boundary=BC['X'])
+        ev = VVEL * -grid.derivative(PHI_SURF, 'Y', boundary=BC['Y'])
 
         # interpolate to velocity points
-        prsSx_tdc = grid.interp(eu, 'X', boundary=self.BCx).rename('prsEx_tdc')
-        prsSy_tdc = grid.interp(ev, 'Y', boundary=self.BCy).rename('prsEy_tdc')
+        prsSx_tdc = grid.interp(eu, 'X', boundary=BC['X']).rename('prsEx_tdc')
+        prsSy_tdc = grid.interp(ev, 'Y', boundary=BC['Y']).rename('prsEy_tdc')
 
         # change unit to energy/day
         prsSx_tdc *= 86400
@@ -799,8 +904,8 @@ class EnergyBudget(TracerBudget):
         py = VVEL * Vm_dPHdy
         
         # interpolate to velocity points
-        prsGx_tdc = interp(px, 'X', boundary=self.BCx).rename('prsGx_tdc')
-        prsGy_tdc = interp(py, 'Y', boundary=self.BCy).rename('prsGy_tdc')
+        prsGx_tdc = interp(px, 'X', boundary=self.BC['X']).rename('prsGx_tdc')
+        prsGy_tdc = interp(py, 'Y', boundary=self.BC['Y']).rename('prsGy_tdc')
         
         # change unit to energy/day
         prsGx_tdc *= 86400
@@ -833,8 +938,8 @@ class EnergyBudget(TracerBudget):
         """
         interp = self.grid.interp
         
-        AdamB_tdc = (interp(AB_gU * UVEL, 'X', boundary=self.BCx) +
-                     interp(AB_gV * VVEL, 'Y', boundary=self.BCy)
+        AdamB_tdc = (interp(AB_gU * UVEL, 'X', boundary=self.BC['X']) +
+                     interp(AB_gV * VVEL, 'Y', boundary=self.BC['Y'])
                     ).rename(f'AdamB_tdc')
         
         # change unit to energy/day
@@ -847,7 +952,7 @@ class EnergyBudget(TracerBudget):
     
     def cal_diffusion_tendency(self, KE, visH, visR):
         """
-        Calculate tendency due to harmonic diffusion.
+        Calculate tendency due to harmonic diffusion \nabla^2 KE.
         
         Parameters
         ----------
@@ -863,14 +968,16 @@ class EnergyBudget(TracerBudget):
         coords = self.coords
         
         # calculate diffusive fluxes
-        dffx = grid.diff(KE, 'X', boundary=self.BCx) * visH / coords.dxC \
+        dffx = grid.diff(KE, 'X', boundary=self.BC['X']) * visH / coords.dxC \
                * (coords.hFacW * coords.drF * coords.dyG)
-        dffy = grid.diff(KE, 'Y', boundary=self.BCy) * visH / coords.dyC \
+        dffy = grid.diff(KE, 'Y', boundary=self.BC['Y']) * visH / coords.dyC \
                * (coords.hFacS * coords.drF * coords.dxG)
         
         # difference to get flux convergence, sign convention is opposite for z
-        diffx_tdc = grid.diff(dffx, 'X', boundary=self.BCx).rename('diffx_tdc')
-        diffy_tdc = grid.diff(dffy, 'Y', boundary=self.BCy).rename('diffy_tdc')
+        diffx_tdc = grid.diff(dffx, 'X',
+                              boundary=self.BC['X']).rename('diffx_tdc')
+        diffy_tdc = grid.diff(dffy, 'Y',
+                              boundary=self.BC['Y']).rename('diffy_tdc')
         
         # change unit to energy/day
         diffx_tdc *= 86400 / self.volume
@@ -919,43 +1026,44 @@ class EnergyBudget(TracerBudget):
         interp = self.grid.interp
         diff   = self.grid.diff
         coords = self.coords
+        BC     = self.BC
         
         # interpolat to tracer point
         u_u = UVEL
-        u_v = interp(interp(UVEL, 'X', boundary=self.BCx), 'Y', boundary='fill')
-        # u_w = interp(interp(UVEL, 'X', boundary=self.BCx), 'Z', boundary='fill')
+        u_v = interp(interp(UVEL, 'X', boundary=BC['X']), 'Y', boundary=BC['Y'])
+        # u_w = interp(interp(UVEL, 'X', boundary=BC['X']), 'Z', boundary='fill')
         
-        v_u = interp(interp(VVEL, 'Y', boundary=self.BCy), 'X', boundary='fill')
+        v_u = interp(interp(VVEL, 'Y', boundary=BC['Y']), 'X', boundary=BC['X'])
         v_v = VVEL
-        # v_w = interp(interp(VVEL, 'Y', boundary=self.BCy), 'Z', boundary='fill')
+        # v_w = interp(interp(VVEL, 'Y', boundary=BCy), 'Z', boundary='fill')
         
         # calculate delta distances
-        dX = interp(coords.dxC, 'X', boundary=self.BCx)
-        dY = interp(coords.dyC, 'Y', boundary=self.BCy)
+        dX = interp(coords.dxC, 'X', boundary=BC['X'])
+        dY = interp(coords.dyC, 'Y', boundary=BC['Y'])
         dR = coords.drF
         
         # calculate squared gradients
-        uxS = (diff(u_u, 'X', boundary=self.BCx) / dX) ** 2
-        uyS = (diff(u_v, 'Y', boundary=self.BCy) / dY) ** 2
+        uxS = (diff(u_u, 'X', boundary=BC['X']) / dX) ** 2
+        uyS = (diff(u_v, 'Y', boundary=BC['Y']) / dY) ** 2
         # urS = (diff(u_w, 'Z', boundary='fill'  ) / dR) ** 2
         
-        vxS = (diff(v_u, 'X', boundary=self.BCx) / dX) ** 2
-        vyS = (diff(v_v, 'Y', boundary=self.BCy) / dY) ** 2
+        vxS = (diff(v_u, 'X', boundary=BC['X']) / dX) ** 2
+        vyS = (diff(v_v, 'Y', boundary=BC['Y']) / dY) ** 2
         # vrS = (diff(v_w, 'Z', boundary='fill'  ) / dR) ** 2
         
         # sum up all the components
         dissi_tdc = - visH * (uxS + uyS + vxS + vyS)# - visR * (urS + vrS)
         
         if not self.hydro:
-            w_u = interp(interp(WVEL, 'Z', boundary='fill'),
-                         'X', boundary=self.BCx)
-            w_v = interp(interp(WVEL, 'Z', boundary='fill'),
-                         'Y', boundary=self.BCy)
+            w_u = interp(interp(WVEL, 'Z', boundary=BC['Z']),
+                         'X', boundary=BC['X'])
+            w_v = interp(interp(WVEL, 'Z', boundary=BC['Z']),
+                         'Y', boundary=BC['Y'])
             w_w = WVEL
             
-            wxS = (diff(w_u, 'X', boundary=self.BCx) / dX) ** 2
-            wyS = (diff(w_v, 'Y', boundary=self.BCy) / dY) ** 2
-            wrS = (diff(w_w, 'Z', boundary='fill'  ) / dR) ** 2
+            wxS = (diff(w_u, 'X', boundary=BC['X']) / dX) ** 2
+            wyS = (diff(w_v, 'Y', boundary=BC['Y']) / dY) ** 2
+            wrS = (diff(w_w, 'Z', boundary=BC['Z']) / dR) ** 2
             
             dissi_tdc += - visH * (wxS + wyS) - visR * wrS
         
@@ -1009,18 +1117,18 @@ class EnergyBudget(TracerBudget):
         bracket2 = (visH * vor - vis4 * Zst) * coords.hFacZ
         
         visUE = diff(bracket1, 'X',
-                     boundary=self.BCx) / coords.dxC - \
+                     boundary=self.BC['X']) / coords.dxC - \
                 diff(bracket2, 'Y',
-                     boundary=self.BCy) / coords.dyG / coords.hFacW
+                     boundary=self.BC['Y']) / coords.dyG / coords.hFacW
         visVE = diff(bracket2, 'X',
-                     boundary=self.BCx) / coords.dxG / coords.hFacS - \
+                     boundary=self.BC['X']) / coords.dxG / coords.hFacS - \
                 diff(bracket1, 'Y',
-                     boundary=self.BCy) / coords.dyC
+                     boundary=self.BC['Y']) / coords.dyC
         
         visUE_tdc = interp(UVEL * visUE, 'X',
-                           boundary=self.BCx).rename('visUE_tdc')
+                           boundary=self.BC['X']).rename('visUE_tdc')
         visVE_tdc = interp(VVEL * visVE, 'Y',
-                           boundary=self.BCy).rename('visVE_tdc')
+                           boundary=self.BC['Y']).rename('visVE_tdc')
         
         visUE_tdc *= 86400
         visVE_tdc *= 86400
@@ -1055,16 +1163,16 @@ class EnergyBudget(TracerBudget):
         diff   = self.grid.diff
         coords = self.coords
         
-        visIU = diff(VISrI_Um, 'Z', boundary='fill') / \
+        visIU = diff(VISrI_Um, 'Z', boundary=self.BC['Z']) / \
                 (coords.drF * coords.hFacW * coords.rAw)
     
-        visIV = diff(VISrI_Vm, 'Z', boundary='fill') / \
+        visIV = diff(VISrI_Vm, 'Z', boundary=self.BC['Z']) / \
                 (coords.drF * coords.hFacS * coords.rAs)
         
         visUI_tdc = interp(UVEL * visIU, 'X',
-                           boundary=self.BCx).rename('visUI_tdc')
+                           boundary=self.BC['X']).rename('visUI_tdc')
         visVI_tdc = interp(VVEL * visIV, 'Y',
-                           boundary=self.BCy).rename('visVI_tdc')
+                           boundary=self.BC['Y']).rename('visVI_tdc')
         
         visUI_tdc *= 86400
         visVI_tdc *= 86400
@@ -1095,7 +1203,7 @@ class EnergyBudget(TracerBudget):
             raise Exception('no conversion term if hydrostatic=True')
         
         # interpolate to velocity points
-        w_c = self.grid.interp(WVEL, 'Z', boundary='fill')
+        w_c = self.grid.interp(WVEL, 'Z', boundary=self.BC['Z'])
         
         # change unit to energy/day
         convs_tdc = (-RHOAnom * g * w_c * 86400 / rhoRef).rename('convs_tdc')
@@ -1129,9 +1237,9 @@ class EnergyBudget(TracerBudget):
         
         # interpolate to tracer point
         uExfx_tdc = grid.interp(ufx, 'X',
-                                boundary=self.BCx).rename('uExfx_tdc')
+                                boundary=self.BC['X']).rename('uExfx_tdc')
         vExfy_tdc = grid.interp(vfy, 'Y',
-                                boundary=self.BCy).rename('vExfy_tdc')
+                                boundary=self.BC['Y']).rename('vExfy_tdc')
         
         # change unit to energy/day
         uExfx_tdc *= 86400
@@ -1168,9 +1276,9 @@ class EnergyBudget(TracerBudget):
         coords = self.coords
         
         Dstar = (diff(lapU * coords.hFacW * coords.dyG,
-                      'X', boundary=self.BCx) +
+                      'X', boundary=self.BC['X']) +
                  diff(lapV * coords.hFacS * coords.dxG,
-                      'Y', boundary=self.BCy)) / coords.hFacC / coords.rA
+                      'Y', boundary=self.BC['Y'])) / coords.hFacC / coords.rA
      
         return Dstar
     
@@ -1190,11 +1298,11 @@ class EnergyBudget(TracerBudget):
         diff   = self.grid.diff
         coords = self.coords
         
-        Zstar = (diff(lapV * coords.dyC, 'X', boundary=self.BCx) +
-                 diff(lapU * coords.dxC, 'Y', boundary=self.BCy)) / coords.rAz
+        Zstar = (diff(lapV * coords.dyC, 'X', boundary=self.BC['X']) +
+                 diff(lapU * coords.dxC, 'Y', boundary=self.BC['Y'])) / coords.rAz
      
         return Zstar
-        
+
 
 """
 Testing codes for each class

@@ -18,7 +18,7 @@ class ContourAnalysis(Application):
     This class is designed for performing the contour analysis.
     """
     def __init__(self, dset, trcr, dims, dimEq,
-                 grid=None, increase=True, lt=False, check_mono=False):
+                 grid=None, increase=True, lt=False):
         """
         Construct a Dynamics instance using a Dataset
 
@@ -41,8 +41,6 @@ class ContourAnalysis(Application):
             Contour increase with the index of equivalent dimension or not.
         lt : bool
             If true, less than a contour is defined as inside the contour.
-        check_mono: bool
-            Check the monotonicity of the result or not (default: False).
         """
         super().__init__(dset, grid=grid)
 
@@ -51,15 +49,20 @@ class ContourAnalysis(Application):
 
         if len(dimEq) != 1:
             raise Exception('dimEq should be one dimension e.g., {"Y","lat"}')
-
-        self.tracer = trcr
         self.dimNs  = list(dims.keys())   # dim names,  ['X', 'Y', 'Z']
         self.dimVs  = list(dims.values()) # dim values, ['lon', 'lat', 'Z']
         self.dimEqN = list(dimEq.keys())[0]
         self.dimEqV = list(dimEq.values())[0]
+        self.increase = increase
         self.lt     = lt
-        self.check_mono = check_mono
-        self.increase   = increase
+        
+        # normalize between [min, max]
+        minV = trcr.min(self.dimVs)
+        maxV = trcr.max(self.dimVs)
+        
+        tr_norm = (trcr - minV) / (maxV - minV)
+
+        self.tracer = tr_norm
 
 
     def cal_area_eqCoord_table(self, mask):
@@ -112,20 +115,11 @@ class ContourAnalysis(Application):
                 mskVar = mask.where(ctrVar < ctr)
         
         tbl = abs(self.grid.integrate(mskVar, self.dimNs).rename('AeqCTbl')) \
-                    .rename({'contour':self.dimEqV}).squeeze().load()
+                    .rename({'contour':self.dimEqV})
         
-        maxArea = abs(self.grid.integrate(mask, self.dimNs)).load().squeeze()
-        
-        # assign the maxArea to the endpoint
-        if tbl[-1] > tbl[0]:
-            tbl[-1] = maxArea.values
-        else:
-            tbl[ 0] = maxArea.values
-        
-        if self.check_mono:
-            check_monotonicity(tbl, 'contour')
-        
-        return Table(tbl, self.dimEqV)
+        print(tbl)
+
+        return Table(tbl.squeeze(), self.dimEqV)
 
     def cal_area_eqCoord_table_hist(self, mask):
         """
@@ -146,29 +140,40 @@ class ContourAnalysis(Application):
         """
         ctr = mask[self.dimEqV].copy().rename({self.dimEqV:'contour'}) \
                                       .rename('contour')
-        ctrVar, _ = xr.broadcast(mask[self.dimEqV], mask)
         
-        ctrVar = ctrVar.where(mask==1)
+        eqDimIncre = ctr[-1] > ctr[0]
         
-        increSame = True
-        if (ctr.values[-1] > ctr.values[0]) != self.increase:
-            increSame = False
-        
-        tbl = _histogram(ctrVar, ctr, self.dimVs,
-                         self.grid.get_metric(ctrVar, self.dimNs), # weights
-                         increSame == self.lt # less than or greater than
-                         ).rename('AeqCTbl').rename({'contour':self.dimEqV})\
-                          .squeeze().load()
-        
-        if increSame:
-            tbl = tbl.assign_coords({self.dimEqV:ctr.values}).squeeze()
+        if self.lt:
+            if eqDimIncre == self.increase:
+                if self.increase:
+                    print('case 1: increase & lt')
+                else:
+                    print('case 1: decrease & lt')
+            else:
+                if self.increase:
+                    print('case 2: increase & lt')
+                else:
+                    print('case 2: decrease & lt')
         else:
-            tbl = tbl.assign_coords({self.dimEqV:ctr.values[::-1]}).squeeze()
+            if eqDimIncre == self.increase:
+                if self.increase:
+                    print('case 3: increase & gt')
+                else:
+                    print('case 3: decrease & gt')
+            else:
+                if self.increase:
+                    print('case 4: increase & gt')
+                else:
+                    print('case 4: decrease & gt')
         
-        if self.check_mono:
-            check_monotonicity(tbl, 'contour')
+        tbl = histogram(mask, bins=[ctr.values], dim=self.dimVs) \
+                .rename('AeqCTbl') \
+                .rename({'contour':self.dimEqv})
         
-        return Table(tbl, self.dimEqV)
+        print(tbl)
+
+        return Table(tbl.squeeze(), self.dimEqV)
+
 
     def cal_contours(self, levels=10):
         """
@@ -208,11 +213,9 @@ class ContourAnalysis(Application):
             ctr = xr.apply_ufunc(mylinspace, start, end, levels,
                                  dask='allowed',
                                  input_core_dims=[[], [], []],
-                                 vectorize=True,
                                  output_core_dims=[['contour']])
 
-            ctr.coords['contour'] = np.linspace(0.0, levels-1.0, levels,
-                                                dtype='float32')
+            ctr.coords['contour'] = np.linspace(0.0, levels-1.0, levels)
             
         else:
              # specifying levels of contours
@@ -223,7 +226,6 @@ class ContourAnalysis(Application):
                                  self.tracer.min(dim=self.dimVs), levels,
                                  dask='allowed',
                                  input_core_dims=[[], []],
-                                 vectorize=True,
                                  output_core_dims=[['contour']])
 
             ctr.coords['contour'] = levels
@@ -231,72 +233,16 @@ class ContourAnalysis(Application):
         return ctr
 
 
-    def cal_integral_within_contours(self, contour, tracer=None, integrand=None,
-                                     out_name=None):
+    def cal_integral_within_contours(self, contour, var=None, out_name=None):
         """
-        Calculate integral of a masked variable within
+        Calculate integral of masked variable within
         pre-calculated tracer contours.
-
-        Parameters
-        ----------
-        contour: xarray.DataArray
-            A given contour levels.
-        integrand: xarray.DataArray
-            A given variable in dset.  If None, area enclosed by contour
-            will be calculated and returned
-        out_name: str
-            A given name for the returned variable.
-
-        Returns
-        ----------
-        intVar : xarray.DataArray
-            The integral of var inside contour.  If None, area enclosed by
-            contour will be calculated and returned
-        """
-        if type(contour) in [np.ndarray, np.array]:
-            # add coordinate as a DataArray
-            contour = xr.DataArray(contour, dims='contour',
-                                   coords={'contour': contour})
-        
-        if tracer is None:
-            tracer = self.tracer
-        
-        # this allocates large memory, xhistogram works better
-        if integrand is None:
-            integrand = tracer - tracer + 1
-        
-        if out_name is None:
-            if integrand is None:
-                out_name = 'area'
-            else:
-                out_name = 'int' + integrand.name
-
-        if self.lt: # this allocates large memory, xhistogram works better
-            mskVar = integrand.where(tracer < contour)
-        else:
-            mskVar = integrand.where(tracer > contour)
-
-        intVar = self.grid.integrate(mskVar, self.dimNs).rename(out_name)
-        
-        if self.check_mono:
-            check_monotonicity(intVar, 'contour')
-
-        return intVar
-
-
-    def cal_integral_within_contours_hist(self, contour, tracer=None,
-                                          integrand=None, out_name=None):
-        """
-        Calculate integral of a masked variable within
-        pre-calculated tracer contours, using histogram method.
 
         Parameters
         ----------
         contour : xarray.DataArray
             A given contour levels.
-        tracedr : xarray.DataArray
-            A given tracer.  Default is self.tracer.
-        integrand: xarray.DataArray
+        var  : xarray.DataArray
             A given variable in dset.  If None, area enclosed by contour
             will be calculated and returned
         out_name : str
@@ -308,29 +254,105 @@ class ContourAnalysis(Application):
             The integral of var inside contour.  If None, area enclosed by
             contour will be calculated and returned
         """
-        if tracer is None:
-            tracer = self.tracer
+        if var is None:
+            var = self.tracer - self.tracer + 1
         
-        # weights are the metrics multiplied by integrand
-        if integrand is not None: 
-            wei = self.grid.get_metric(tracer, self.dimNs) * integrand
+        if out_name is None:
+            if var is None:
+                out_name = 'area'
+            else:
+                out_name = 'int' + var.name
+
+        if self.lt:
+            mskVar = var.where(self.tracer < contour)
         else:
-            wei = self.grid.get_metric(tracer, self.dimNs)
+            mskVar = var.where(self.tracer > contour)
+
+        intVar = self.grid.integrate(mskVar, self.dimNs).rename(out_name)
+
+        return intVar
+
+
+    def cal_integral_within_contours_hist(self, contour, var=None, out_name=None):
+        """
+        Calculate integral of masked variable within
+        pre-calculated tracer contours, using histogram method.
+
+        Parameters
+        ----------
+        contour : xarray.DataArray
+            A given contour levels.
+        var  : xarray.DataArray
+            A given variable in dset.  If None, area enclosed by contour
+            will be calculated and returned
+        out_name : str
+            A given name for the returned variable.
+
+        Returns
+        ----------
+        intVar : xarray.DataArray
+            The integral of var inside contour.  If None, area enclosed by
+            contour will be calculated and returned
+        """
+        if var is not None: 
+            wei = self.grid.get_metric(self.tracer, self.dimNs) * var
+        else:
+            wei = self.grid.get_metric(self.tracer, self.dimNs)
         
-        # replacing nan with 0 in weights, as weights cannot have nan
         wei = wei.fillna(0.)
         
-        CDF = _histogram(tracer, contour, self.dimVs,
-                          wei, self.lt).rename(out_name)
+        # add a bin so that the result has the same length of contour
+        if self.increase:
+            inc = -0.1
+        else:
+            inc = 0.1
         
-        # ensure that the contour index is increasing
-        if CDF['contour'][-1] < CDF['contour'][0]:
-            CDF = CDF.isel({'contour':slice(None, None, -1)})
+        re = []
         
-        if self.check_mono:
-            check_monotonicity(CDF, 'contour')
+        # unified the contour coordinate
+        binNum = np.array(range(contour['contour'].shape[0])).astype(np.float32)
         
-        return CDF
+        if 'time' in contour.coords and False:
+            for l in range(len(contour.time)):
+                rng = {'time': l}
+                
+                tr  = self.tracer.isel(rng)
+                ctr = contour.isel(rng)
+                
+                if 'time' in wei.coords:
+                    wt = wei.isel(rng)
+                else:
+                    wt = wei
+                
+                # add a bin so that the result has the same length of contour
+                # bins = np.insert(ctr.values, 0, ctr.values[0]+inc)
+                print(ctr.values[0]+inc)
+                bins = np.concatenate([[ctr.values[0]+inc], ctr.values])
+                
+                tmp = histogram(tr, bins=[bins], dim=self.dimVs, weights=wt)
+                tmp[contour.name+'_bin'] = binNum
+                
+                re.append(tmp)
+        else:
+            # add a bin so that the result has the same length of contour
+            print('ok1')
+            bins = np.insert(contour.values, 0, contour.values[0]+inc)
+            
+            print('ok2')
+            tmp = histogram(self.tracer, bins=[bins], dim=self.dimVs, weights=wei)
+            print('ok3')
+            tmp[contour.name+'_bin'] = binNum
+            print('ok4')
+            re.append(tmp)
+        
+        print('ok5')
+        area = xr.concat(re, 'time').rename({contour.name+'_bin':'contour'}) \
+                 .cumsum('contour').rename(out_name)
+        print('ok6')
+        area['time'] = self.tracer['time'].copy()
+        print('ok7')
+        
+        return area
 
 
     def cal_gradient_wrt_area(self, var, area):
@@ -379,75 +401,6 @@ class ContourAnalysis(Application):
         return Leq2
 
 
-    def cal_local_wave_activity(self, q, Q, table, reso=2):
-        """
-        Calculate local finite-amplitude wave activity.
-        Reference: Huang and Nakamura 2016, JAS
-
-        Parameters
-        ----------
-        q: xarray.DataArray
-            A tracer field.
-        Q: xarray.DataArray
-            The sorted tracer field.
-        table: Table
-            The discretized table between equivalent dimension
-            and q-contour e.g., Y(q) table.
-        reso: int
-            Increase resolution relative to the original one along
-            the equivalent dimension.
-        
-        Returns
-        ----------
-        lwa : xarray.DataArray
-            Local finite-amplitude wave activity.
-        """
-        if type(reso) is not int:
-            raise Exception('reso should be int')
-        
-        wei = self.grid.get_metric(q, self.dimEqN).squeeze()
-        
-        q = q.squeeze()
-        
-        eqDim = q[self.dimEqV]
-        eqDimLen = len(eqDim)
-        tmp = []
-        
-        # equivalent dimension is increasing or not
-        coord_incre = True
-        if eqDim.values[-1] < eqDim.values[0]:
-            coord_incre = False
-        
-        for j in range(eqDimLen):
-            # deviation from the reference
-            qe = q - Q.isel({self.dimEqV:j})
-            
-            # above or below the reference coordinate surface
-            m = eqDim>eqDim.values[j] if coord_incre else eqDim<eqDim.values[j]
-            
-            if self.increase:
-                mask1 = xr.where(qe>0, -1, 0)
-                mask2 = xr.where(m, 0, mask1).transpose(*(mask1.dims))
-                mask3 = xr.where(np.logical_and(qe<0, m), 1, mask2)
-            else:
-                mask1 = xr.where(qe<0, -1, 0)
-                mask2 = xr.where(m, 0, mask1).transpose(*(mask1.dims))
-                mask3 = xr.where(np.logical_and(qe>0, m), 1, mask2)
-            
-            lwa = (qe * mask3 * wei).sum(self.dimEqV)
-            #lwa = self.grid.integrate(qe * mask3 * wei, self.dimEqV)
-            
-            tmp.append(lwa)
-            
-            # if j==180:
-            #     mask3.plot()
-        
-        LWA = xr.concat(tmp, self.dimEqV).transpose(*(q.dims))
-        LWA[self.dimEqV] = eqDim.values
-        
-        return LWA
-
-
     def cal_normalized_Keff(self, Leq2, Lmin, mask=1e5):
         """
         Calculate normalized effective diffusivity.
@@ -470,6 +423,30 @@ class ContourAnalysis(Application):
         nkeff = nkeff.where(nkeff<mask).rename('nkeff')
 
         return nkeff
+
+
+    def check_monotonicity(self, var, dim):
+        """
+        Check monotonicity of a variable along a dimension.
+
+        Parameters
+        ----------
+        var : xarray.DataArray
+            A variable that need to be checked.
+        dim : str
+            A string indicate the dimension.
+
+        Returns
+        ----------
+        True or False.
+        """
+        diffVar = var.diff(dim)
+
+        if not diffVar.all():
+            print('not monotonic var')
+            return False
+        
+        return True
 
 
     def interp_to_dataset(self, predef, dimEq, vs):
@@ -535,59 +512,16 @@ class ContourAnalysis(Application):
             predef = xr.DataArray(predef, dims='new', coords={'new': predef})
 
         N = predef.size
-        
+
         ctr   = self.cal_contours(N)
         area  = self.cal_integral_within_contours(ctr)
         dimEq = table.lookup_coordinates(area).rename('Z')
         # print(self.interp_to_coords(predef, dimEq, ctr))
-        qIntp = self.interp_to_coords(predef.squeeze(), dimEq, ctr.squeeze()) \
+        qIntp = self.interp_to_coords(predef, dimEq, ctr) \
                     .rename({'new': 'contour'}) \
                     .rename(ctr.name)
 
-        qIntp['contour'] = np.linspace(0, N-1, N, dtype='float32')
-
-        return qIntp
-
-
-    def cal_contours_at_hist(self, predef, table):
-        """
-        Calculate contours for a tracer at prescribed Ys,
-        so that the returned contour and its enclosed area will give a
-        monotonic increasing/decreasing results.
-
-        This function will first rough estimate the contour-enclosed
-        area and equivalent Ys, and then interpolate the Y(q) relation
-        table to get the q(Y) and return q.
-
-        Parameters
-        ----------
-        predef : xarray.DataArray or numpy.ndarray or numpy.array
-            An 1D array of prescribed coordinate values.
-        table : Table
-            A(dimEq) table.
-
-        Returns
-        ----------
-        contour : xarray.DataArray
-            A array of contour levels corresponding to preY.
-        """
-        if len(predef.shape) != 1:
-            raise Exception('predef should be a 1D array')
-
-        if type(predef) in [np.ndarray, np.array]:
-            # add coordinate as a DataArray
-            predef = xr.DataArray(predef, dims='new', coords={'new': predef})
-
-        N = predef.size
-        
-        ctr   = self.cal_contours(N)
-        area  = self.cal_integral_within_contours_hist(ctr)
-        dimEq = table.lookup_coordinates(area).rename('Z')
-        qIntp = self.interp_to_coords(predef.squeeze(), dimEq, ctr.squeeze()) \
-                    .rename({'new': 'contour'}) \
-                    .rename(ctr.name)
-
-        qIntp['contour'] = np.linspace(0, N-1, N, dtype='float32')
+        qIntp['contour'] = np.linspace(0, N-1, N)
 
         return qIntp
 
@@ -638,10 +572,9 @@ class ContourAnalysis(Application):
         else:
             increasing = False
         
-        # no dask support for np.linspace
-        varIntp = xr.apply_ufunc(interp1d, predef, eqCoords, var.load(),
+        varIntp = xr.apply_ufunc(interp1d, predef, eqCoords, var,
                   kwargs={'inc': increasing},
-                  # dask='allowed',
+                  dask='allowed',
                   input_core_dims =[[dimTmp],[interpDim],[interpDim]],
                   output_core_dims=[[dimTmp]],
                   exclude_dims=set((interpDim,)),
@@ -685,7 +618,7 @@ class Table(object):
 
         Parameters
         ----------
-        values: numpy.ndarray or xarray.DataArray
+        values : numpy.ndarray or xarray.DataArray
             Values as y.
 
         Returns
@@ -713,11 +646,8 @@ class Table(object):
         #               # exclude_dims=set(('contour',)),
         #               vectorize=True
         #               ).rename(dimEq + 'eq')
-        
+    
         #     return varIntp
-        if len(values.dims) > 1:
-            values = values.squeeze()
-        
         re = interp1d(values, self._table, self._coord, self._incVl)
         
         if isinstance(re, np.ndarray):
@@ -748,7 +678,7 @@ class Table(object):
         
 
 
-def equivalent_Latitudes(area):
+def eqLatitudes(area):
     """
     Calculate equivalent latitude using the formular:
         2 * pi * a^2 * [sin(latEq) + sin(90)] = area.
@@ -775,7 +705,7 @@ def equivalent_Latitudes(area):
     return latEq
 
 
-def mininum_Length_at(lats):
+def mininumLats(lats):
     """
     Calculate minimum length on a sphere given latitudes.
 
@@ -792,190 +722,6 @@ def mininum_Length_at(lats):
     Lmin = (2.0 * np.pi * Rearth * np.cos(np.deg2rad(lats)))
 
     return Lmin
-
-
-def check_monotonicity(var, dim):
-    """
-    Check monotonicity of a variable along a dimension.
-
-    Parameters
-    ----------
-    var : xarray.DataArray
-        A variable that need to be checked.
-    dim : str
-        A string indicate the dimension.
-
-    Returns
-    ----------
-        None.  Raise exception if not monotonic
-    """
-    dfvar = var.diff(dim)
-    
-    if not dfvar.all():
-        pos = (dfvar == 0).argmax(dim=var.dims)
-        
-        for tmp in pos:
-            print(tmp)
-            print(pos[tmp].values)
-            
-            if tmp != dim:
-                v = var.isel({tmp:pos[tmp].values}).load()
-        
-        raise Exception('not monotonic var at\n' + str(v))
-
-
-
-"""
-Below are the private helper methods
-"""
-def _histogram(var, bins, dim, weights, lt):
-    """
-    A wrapper for xhistogram, which allows decreasing bins and return
-    a result that contains the same size as that of bins.
-    
-    Note that it is assumed the start and end bins correspond to the tracer
-    extrema.
-    
-    Parameters
-    ----------
-    var: xarray.DataArray
-        A variable that need to be histogrammed.
-    bins: list or numpy.array or xarray.DataArray
-        An array of bins.
-    dim: str or list of str
-        Dimensions along which histogram is performed.
-    weights: xarray.DataArray
-        Weights of each data in var.
-    increase: bool
-        Increasing bins with index or not.
-    lt: bool
-        Less than a given value or not.
-    
-    Returns
-    ----------
-    hist : xarray.DataArray
-        Result of the histogram.
-    """
-    if type(bins) in [np.ndarray, np.array]:
-        bvalues = bins
-        
-        if not np.diff(bvalues).all():
-            raise Exception('non monotonic bins')
-            
-    elif type(bins) in [xr.DataArray]:
-        bvalues = bins.squeeze() # squeeze the dimensions
-        
-        if not bvalues.diff('contour').all():
-            raise Exception('non monotonic bins')
-        
-        if not 'time' in bvalues.dims:
-            bvalues = bvalues.values
-        
-    elif type(bins) in [list]:
-        bvalues = np.array(bins)
-        
-        if not np.diff(bvalues).all():
-            raise Exception('non monotonic bins')
-    else:
-        raise Exception('bins should be numpy.array or xarray.DataArray')
-            
-    # unified index of the contour coordinate
-    if type(bvalues) in [xr.DataArray]:
-        binNum = np.array(range(len(bvalues['contour']))).astype(np.float32)
-    else:
-        binNum = np.array(range(len(bvalues))).astype(np.float32)
-    
-    if type(bvalues) in [xr.DataArray]:
-        re = []
-        
-        for l in range(len(bvalues.time)):
-            rng = {'time': l}
-            
-            trc = var.isel(rng)
-            ctr = bvalues.isel(rng).values
-            
-            if 'time' in weights.dims:
-                wt = weights.isel(rng)
-            else:
-                wt = weights
-            
-            bincrease = True if ctr[0] < ctr[-1] else False
-            
-            # add a bin so that the result has the same length of contour
-            if bincrease:
-                step = (ctr[-1] - ctr[0]) / (len(ctr) - 1)
-                bins = np.concatenate([[ctr[0]-step], ctr])
-            else:
-                step = (ctr[0] - ctr[-1]) / (len(ctr) - 1)
-                bins = np.concatenate([[ctr[-1]-step], ctr[::-1]])
-                # bins[1:] -= step / 1e3
-            
-            tmp = histogram(trc, bins=[bins], dim=dim, weights=wt) \
-                 .assign_coords({trc.name+'_bin':binNum})
-            
-            re.append(tmp)
-        
-        pdf = xr.concat(re, 'time').rename({var.name+'_bin':'contour'})
-        
-        if bincrease:
-            pdf = pdf.assign_coords(contour=binNum)
-        else:
-            pdf = pdf.assign_coords(contour=binNum[::-1])
-    else:
-        bincrease = True if bvalues[0] < bvalues[-1] else False
-        
-        # add a bin so that the result has the same length of contour
-        if bincrease:
-            step = (bvalues[-1] - bvalues[0]) / (len(bvalues) - 1)
-            bins = np.insert(bvalues, 0, bvalues[0]-step)
-        else:
-            step = (bvalues[0] - bvalues[-1]) / (len(bvalues) - 1)
-            bins = np.insert(bvalues[::-1], 0, bvalues[-1]-step)
-            # bins[1:] -= step / 1e3
-        
-        pdf = histogram(var, bins=[bins], dim=dim, weights=weights) \
-              .rename({var.name+'_bin':'contour'})
-        
-        if bincrease:
-            pdf = pdf.assign_coords(contour=binNum)
-        else:
-            pdf = pdf.assign_coords(contour=binNum[::-1])
-    
-    # assign time coord. to pdf
-    if 'time' in var.dims:
-        pdf = pdf.assign_coords(time=var['time'].values)
-    
-    # get CDF from PDF
-    cdf = pdf.cumsum('contour')
-    
-    if not lt: # for the case of greater than
-        cdf = cdf.isel({'contour':-1}) - cdf
-    
-    return cdf
-
-
-def _get_extrema_extend(data, N):
-    """
-    Get the extrema by extending the endpoints
-    
-    Parameters
-    ----------
-    data: xarray.DataArray
-        A variable that need to be histogrammed.
-    N: int
-        A given length to get step
-    
-    Returns
-    ----------
-    vmin, vmax : float, float
-        Extended extrema.
-    """
-    vmin = data.min().values
-    vmax = data.max().values
-    
-    step = (vmax - vmin) / N
-    
-    return vmin - step, vmax + step
 
 
 """

@@ -10,32 +10,36 @@ import xgcm
 import xmitgcm
 import xarray as xr
 import matplotlib.pyplot as plt
+from GeoApps.Application import Application
+from .ConstUtils import g
 
 
-class EOSMethods(object):
+class EOSMethods(Application):
     """
     This class is designed for EOS related methods in MITgcm.
     """
-    def __init__(self, dset):
+    def __init__(self, dset, grid=None, arakawa='A'):
         """
-        Construct a class instance using a Dataset
+        Construct a EOS instance using a Dataset
         
         Parameters
         ----------
         dset : xarray.Dataset
             a given Dataset containing MITgcm output diagnostics
+        grid : xgcm.Grid
+            a given grid that accounted for grid metrics
+        arakawa : str
+            The type of the grid. Reference:
+                https://db0nus869y26v.cloudfront.net/en/Arakawa_grids
         """
-        self.grid   = xgcm.Grid(dset)
-        self.coords = dset.coords.to_dataset().reset_coords()
-        self.dset   = dset.reset_coords(drop=True)
-        self.volume = dset.drF * dset.hFacC * dset.rA
-        self.terms  = None
+        super().__init__(dset, grid=grid, arakawa=arakawa)
 
 
     """
     All the EOS-related terms calculation methods.
     """
-    def cal_insitu_density(self, THETA, SALT, PHrefC, rhoRef=999.8):
+    @staticmethod
+    def cal_insitu_density(THETA, SALT, PHrefC, rhoRef=999.8):
         """
         Calculate in-situ density using model outputs and seawater module.
     
@@ -54,7 +58,8 @@ class EOSMethods(object):
         Return
         ----------
         dens : xarray.DataArray
-            In-situ density that should be exactly the same as RHOAnoma + rhoRef
+            In-situ density that should be exactly the same as
+            RHOAnoma + rhoRef
         """
         # get MITgcm diagnostics
         PRESS = PHrefC * (rhoRef / 10000) # in unit of dbar
@@ -70,7 +75,8 @@ class EOSMethods(object):
         return RHO
     
     
-    def cal_linear_insitu_density(self, THETA, SALT,
+    @staticmethod
+    def cal_linear_insitu_density(THETA, SALT,
                            tRef  =20  , sRef=30, rhoRef=999.8,
                            tAlpha=2E-4, sBeta=7.4E-4):
         """
@@ -96,7 +102,8 @@ class EOSMethods(object):
         Return
         ----------
         dens : xarray.DataArray
-            In-situ density that should be exactly the same as RHOAnoma + rhoRef
+            In-situ density that should be exactly the same as
+            RHOAnoma + rhoRef
         """
         # cal. in-situ density using linear EOS
         RHO = rhoRef * (sBeta * (SALT-sRef) - tAlpha * (THETA - tRef)) + rhoRef
@@ -105,8 +112,32 @@ class EOSMethods(object):
         
         return RHO
     
+    @staticmethod
+    def cal_linear_buoyancy(rho, rhoRef=999.8):
+        """
+        Calculate buoyancy using linear EOS given potential density.
     
-    def cal_pressure_potential(self, RHO, ETAN, PHrefC, rhoRef=999.8, g=9.81):
+        Parameters
+        ----------
+        rho : DataArray
+            Model-output in-situ density (kg m^-3).
+        rhoRef: float
+            Model-output reference density (kg m^-3).
+    
+        Return
+        ----------
+        dens : xarray.DataArray
+            In-situ density that should be exactly the same as
+            RHOAnoma + rhoRef
+        """
+        buoyancy = g * (rhoRef - rho) / rhoRef
+        
+        buoyancy.rename('buoyancy')
+        
+        return buoyancy
+    
+    
+    def cal_pressure_potential(self, RHO, ETAN, PHrefC, rhoRef=999.8):
         """
         Calculate pressure potential (p/rhoConst) using model outputs.
     
@@ -121,6 +152,8 @@ class EOSMethods(object):
             (m^2 s^-2) at vertical grid cell.
         rhoRef: float or DataArray
             Model-output reference density (kg m^-3).
+        g: float
+            Gravitational acceleration (m s^-2)
     
         Return
         ----------
@@ -138,6 +171,32 @@ class EOSMethods(object):
         pp.rename('PRSPT')
         
         return pp
+    
+    @staticmethod
+    def cal_bottom_pressure_potential(DEPTH, PHIBOT, rhoRef=999.8):
+        """
+        Calculate bottom pressure potential (p_bot/rhoConst)
+        using model outputs.
+    
+        Parameters
+        ----------
+        DEPTH : DataArray
+            Model-output depth (m).
+        PHIBOT : DataArray
+            Bottom pressure potential anomalies (m).
+        rhoRef: float or DataArray
+            Model-output reference density (kg m^-3).
+        g: float
+            Gravitational acceleration (m s^-2)
+    
+        Return
+        ----------
+        ppbot : xarray.DataArray
+            Pressure potential (m^2 s^-2) at the bottom of the model.
+        """
+        ppbot = (PHIBOT + g * abs(DEPTH)).rename('ppbot')
+        
+        return ppbot
 
 
 """
@@ -169,12 +228,14 @@ if __name__ == '__main__':
     fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(10,5))
     
     rho1 = method.cal_linear_insitu_density(THETA, SALT)
-    rho2 = dset.RHOAnoma[0,:,1:-2,:].where(dset.maskC[0,1:-2,:]!=0).load() + 999.8
+    rho2 = dset.RHOAnoma[0,:,1:-2,:].where(dset.maskC[0,1:-2,:]!=0).load() +\
+            999.8
     
     (rho1 - rho2)[10,:,:].plot(ax=axes[0])
 
     pp1 = method.cal_pressure_potential(rho2, ETAN, PHrefC)
-    pp2 = dset.PHIHYD[0,:,1:-2,:].where(dset.maskC[0,1:-2,:]!=0).load() + PHrefC
+    pp2 = dset.PHIHYD[0,:,1:-2,:].where(dset.maskC[0,1:-2,:]!=0).load() +\
+            PHrefC
 
     (pp1 - pp2)[10,:,:].plot(ax=axes[1])
     

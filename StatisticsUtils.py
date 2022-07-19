@@ -22,8 +22,6 @@ def lag_linregress(x, y, lagx=0, lagy=0):
         The x-coordinates of the data points.
     lagx : 1-D sequence of float or complex
         The y-coordinates of the data points, same length as `xp`.
-    inc : boolean
-        xp is increasing or decresing.
 
     Returns
     ----------

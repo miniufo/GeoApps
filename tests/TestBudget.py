@@ -446,6 +446,7 @@ budgetU.cal_viscous_tendency(Um_Diss, VISrI_Um)
 budgetU.cal_pressure_gradX_tendency(Um_dPHdx, None, PHI_SURF)
 budgetU.cal_Adams_Bashforth_tendency(AB_gU)
 budgetU.cal_external_forcing_tendency(Um_Ext)
+budgetU.calM_viscous_tendency(UVEL, VVEL, 12, 3e-4)
 reU = budgetU.terms
 
 
@@ -459,7 +460,7 @@ reV = budgetV.terms
 
 
 budgetE.cal_true_tendency(KE, 10800)
-budgetE.cal_advection_tendency(UVEL, VVEL, WVEL, KE)
+budgetE.cal_advection_tendency(KE, UVEL, VVEL, WVEL)
 budgetE.cal_diffusion_tendency(KE, 12, 3e-4)
 #budgetE.cal_conversion_tendency(WVEL, RHOAnoma)
 budgetE.cal_surf_tendency(UVEL, VVEL, PHI_SURF)
@@ -508,26 +509,26 @@ sumupU = reU.advct_tdc + reU.exter_tdc + reU.AdamB_tdc + \
 sumupV = reV.advct_tdc + reV.exter_tdc + reV.AdamB_tdc + \
          reV.hydry_tdc + reV.phisy_tdc + reV.visco_tdc
 
-reE.coords['XC'] /= 1000 # convert to km
-reE.coords['YC'] /= 1000 # convert to km
-total_tdc.coords['XC'] /= 1000
-total_tdc.coords['YC'] /= 1000
-advct_tdc.coords['XC'] /= 1000
-advct_tdc.coords['YC'] /= 1000
-exfrc_tdc.coords['XC'] /= 1000
-exfrc_tdc.coords['YC'] /= 1000
-AdamB_tdc.coords['XC'] /= 1000
-AdamB_tdc.coords['YC'] /= 1000
-prsGF_tdc.coords['XC'] /= 1000
-prsGF_tdc.coords['YC'] /= 1000
-phisf_tdc.coords['XC'] /= 1000
-phisf_tdc.coords['YC'] /= 1000
-viscE_tdc.coords['XC'] /= 1000
-viscE_tdc.coords['YC'] /= 1000
-viscI_tdc.coords['XC'] /= 1000
-viscI_tdc.coords['YC'] /= 1000
-visco_tdc.coords['XC'] /= 1000
-visco_tdc.coords['YC'] /= 1000
+# reE.coords['XC'] /= 1000 # convert to km
+# reE.coords['YC'] /= 1000 # convert to km
+# total_tdc.coords['XC'] /= 1000
+# total_tdc.coords['YC'] /= 1000
+# advct_tdc.coords['XC'] /= 1000
+# advct_tdc.coords['YC'] /= 1000
+# exfrc_tdc.coords['XC'] /= 1000
+# exfrc_tdc.coords['YC'] /= 1000
+# AdamB_tdc.coords['XC'] /= 1000
+# AdamB_tdc.coords['YC'] /= 1000
+# prsGF_tdc.coords['XC'] /= 1000
+# prsGF_tdc.coords['YC'] /= 1000
+# phisf_tdc.coords['XC'] /= 1000
+# phisf_tdc.coords['YC'] /= 1000
+# viscE_tdc.coords['XC'] /= 1000
+# viscE_tdc.coords['YC'] /= 1000
+# viscI_tdc.coords['XC'] /= 1000
+# viscI_tdc.coords['YC'] /= 1000
+# visco_tdc.coords['XC'] /= 1000
+# visco_tdc.coords['YC'] /= 1000
 
 #%%
 fig, axes = plt.subplots(nrows=1, ncols=3, figsize=(13, 5))
