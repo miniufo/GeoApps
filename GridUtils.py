@@ -62,10 +62,10 @@ def add_latlon_metrics(dset, dims=None, boundary=None):
             raise Exception('unknown dimension names in dset, should be in '
                             + str(dimXList + dimYList))
     else:
-        lon = dims['lon'] if 'lon' in dims else None
-        lat = dims['lat'] if 'lat' in dims else None
-        lev = dims['lev'] if 'lev' in dims else None
-        
+        lon = dims['X'] if 'X' in dims else None
+        lat = dims['Y'] if 'Y' in dims else None
+        lev = dims['Z'] if 'Z' in dims else None
+
     if lev is None:
         ds = generate_grid_ds(dset, {'X':lon, 'Y':lat})
     else:
@@ -84,16 +84,16 @@ def add_latlon_metrics(dset, dims=None, boundary=None):
         periodic = 'X'
         
         if lev is None:
-            grid = Grid(ds, periodic=periodic, boundary={'Y': BCy})
+            grid = Grid(ds, periodic=[periodic], boundary={'Y': BCy})
         else:
-            grid = Grid(ds, periodic=periodic, boundary={'Z':BCz, 'Y': BCy})
+            grid = Grid(ds, periodic=[periodic], boundary={'Z':BCz, 'Y': BCy})
     else:
         periodic = []
         
         if lev is None:
-            grid = Grid(ds, boundary={'Y': BCy, 'X': BCx})
+            grid = Grid(ds, periodic=False, boundary={'Y': BCy, 'X': BCx})
         else:
-            grid = Grid(ds, boundary={'Z': BCz, 'Y': BCy, 'X': BCx})
+            grid = Grid(ds, periodic=False, boundary={'Z': BCz, 'Y': BCy, 'X': BCx})
     
     
     lonC = ds[lon]
