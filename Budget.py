@@ -31,6 +31,7 @@ class Budget(Application):
             A Dataset containing all budget terms
         """
         super().__init__(dset, grid=grid)
+        self.terms = None
         
 
 
@@ -753,8 +754,11 @@ class EnergyBudget(TracerBudget):
         interp = self.grid.interp
         
         # interpolate to get tracer-point energy
-        KE = (interp(UVEL * coords.hFacW, 'X', boundary=self.BC['X']) **2 +
-              interp(VVEL * coords.hFacS, 'Y', boundary=self.BC['Y']) **2)
+        KE = interp(UVEL * coords.hFacW, 'X', boundary=self.BC['X']) **2
+        
+        if VVEL != None:
+            KE += interp(VVEL * coords.hFacS, 'Y', boundary=self.BC['Y']) **2
+        
         KE *= 0.5
         KE = KE.rename('KE')
         
@@ -810,34 +814,42 @@ class EnergyBudget(TracerBudget):
 
         # interpolate to velocity points
         KE_u = grid.interp(KE, 'X', boundary=BC['X'])
-        KE_v = grid.interp(KE, 'Y', boundary=BC['Y'])
-        KE_w = grid.interp(KE, 'Z', boundary=BC['Z'])
-        
-        # calculate the fluxes
         ADVx = UVEL * KE_u * coords.dyG * coords.hFacW * coords.drF
-        ADVy = VVEL * KE_v * coords.dxG * coords.hFacS * coords.drF
-        ADVr = WVEL * KE_w * coords.rA
-        
         adv_x_tdc =-grid.diff(ADVx, 'X', boundary=BC['X']).rename('adv_x_tdc')
-        adv_y_tdc =-grid.diff(ADVy, 'Y', boundary=BC['Y']).rename('adv_y_tdc')
-        adv_r_tdc = grid.diff(ADVr, 'Z', boundary=BC['Z']).rename('adv_r_tdc')
-        
         adv_x_tdc = adv_x_tdc * 86400 / self.volume
-        adv_y_tdc = adv_y_tdc * 86400 / self.volume
-        adv_r_tdc = adv_r_tdc * 86400 / self.volume
-
-        # sum up to get the total tendency due to advection
-        advct_tdc = (adv_x_tdc + adv_y_tdc + adv_r_tdc).rename('advct_tdc')
+        advct_tdc = adv_x_tdc # sum up to get the total tendency
+        
+        if VVEL != None:
+            KE_v = grid.interp(KE, 'Y', boundary=BC['Y'])
+            ADVy = VVEL * KE_v * coords.dxG * coords.hFacS * coords.drF
+            adv_y_tdc =-grid.diff(ADVy, 'Y', boundary=BC['Y']).rename('adv_y_tdc')
+            adv_y_tdc = adv_y_tdc * 86400 / self.volume
+            advct_tdc += adv_y_tdc # sum up to get the total tendency
+        
+        if WVEL != None:
+            KE_w = grid.interp(KE, 'Z', boundary=BC['Z'])
+            ADVr = WVEL * KE_w * coords.rA
+            adv_r_tdc = grid.diff(ADVr, 'Z', boundary=BC['Z']).rename('adv_r_tdc')
+            adv_r_tdc = adv_r_tdc * 86400 / self.volume
+            advct_tdc += adv_r_tdc # sum up to get the total tendency
 
         if self.terms is not None:
             self.terms['adv_x_tdc'] = adv_x_tdc
-            self.terms['adv_y_tdc'] = adv_y_tdc
-            self.terms['adv_r_tdc'] = adv_r_tdc
+            if VVEL != None:
+                self.terms['adv_y_tdc'] = adv_y_tdc
+            if WVEL != None:
+                self.terms['adv_r_tdc'] = adv_r_tdc
             self.terms['advct_tdc'] = advct_tdc
         else:
-            self.terms = xr.merge([adv_x_tdc, adv_y_tdc, adv_r_tdc, advct_tdc])
+            allterms = [adv_x_tdc]
+            if VVEL != None:
+                allterms.append(adv_y_tdc)
+            if WVEL != None:
+                allterms.append(adv_r_tdc)
+            allterms.append(advct_tdc)
+            self.terms = xr.merge(allterms)
 
-    def cal_surf_tendency(self, UVEL, VVEL, PHI_SURF):
+    def cal_surf_tendency(self, PHI_SURF, UVEL, VVEL=None):
         """
         Calculate pressure gradient tendency due to surface elevation.
         
@@ -858,25 +870,30 @@ class EnergyBudget(TracerBudget):
 
         # calculate gradient
         eu = UVEL * -grid.derivative(PHI_SURF, 'X', boundary=BC['X'])
-        ev = VVEL * -grid.derivative(PHI_SURF, 'Y', boundary=BC['Y'])
-
-        # interpolate to velocity points
         prsSx_tdc = grid.interp(eu, 'X', boundary=BC['X']).rename('prsEx_tdc')
-        prsSy_tdc = grid.interp(ev, 'Y', boundary=BC['Y']).rename('prsEy_tdc')
-
-        # change unit to energy/day
-        prsSx_tdc *= 86400
-        prsSy_tdc *= 86400
-
-        # sum up to get the total tendency due to harmonic diffusion
-        prsSF_tdc = (prsSx_tdc + prsSy_tdc).rename('prsSF_tdc')
+        prsSx_tdc *= 86400 # change unit to energy/day
+        
+        if VVEL != None:
+            ev = VVEL * -grid.derivative(PHI_SURF, 'Y', boundary=BC['Y'])
+            prsSy_tdc = grid.interp(ev, 'Y', boundary=BC['Y']).rename('prsEy_tdc')
+            prsSy_tdc *= 86400 # change unit to energy/day
+        
+        if VVEL != None:
+            # sum up to get the total tendency due to harmonic diffusion
+            prsSF_tdc = (prsSx_tdc + prsSy_tdc).rename('prsSF_tdc')
+        else:
+            prsSF_tdc = prsSx_tdc.copy().rename('prsSF_tdc')
 
         if self.terms is not None:
             self.terms['prsSx_tdc'] = prsSx_tdc
-            self.terms['prsSy_tdc'] = prsSy_tdc
+            if VVEL != None:
+                self.terms['prsSy_tdc'] = prsSy_tdc
             self.terms['prsSF_tdc'] = prsSF_tdc
         else:
-            self.terms = xr.merge([prsSx_tdc, prsSy_tdc, prsSF_tdc])
+            if VVEL != None:
+                self.terms = xr.merge([prsSx_tdc, prsSy_tdc, prsSF_tdc])
+            else:
+                self.terms = xr.merge([prsSx_tdc, prsSF_tdc])
 
     def cal_pressure_tendency(self, UVEL, VVEL, Um_dPHdx, Vm_dPHdy):
         """

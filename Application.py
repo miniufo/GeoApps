@@ -32,17 +32,17 @@ class Application(object):
         self.coords  = dset.coords.to_dataset().reset_coords()
         self.dset    = dset
         self.arakawa = arakawa
-        # self.BC      = {}
+        self.BC      = {}
         
-        # self.dset   = dset.reset_coords(drop=True)
-        # self.volume = dset.drF * dset.hFacC * dset.rA
+        self.dset   = dset.reset_coords(drop=True)
+        self.volume = dset.drF * dset.hFacC * dset.rA
         
-        # if 'X' in self.grid.axes:
-        #     self.BC['X'] = 'periodic' if grid.axes['X']._periodic else 'extend'
-        # if 'Y' in self.grid.axes:
-        #     self.BC['Y'] = 'periodic' if grid.axes['Y']._periodic else 'extend'
-        # if 'Z' in self.grid.axes:
-        #     self.BC['Z'] = 'periodic' if grid.axes['Z']._periodic else 'extend'
+        if 'X' in self.grid.axes:
+            self.BC['X'] = 'periodic' if self.grid.axes['X']._periodic else 'extend'
+        if 'Y' in self.grid.axes:
+            self.BC['Y'] = 'periodic' if self.grid.axes['Y']._periodic else 'extend'
+        if 'Z' in self.grid.axes:
+            self.BC['Z'] = 'periodic' if self.grid.axes['Z']._periodic else 'extend'
 
 
 """

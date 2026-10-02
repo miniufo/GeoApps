@@ -8,20 +8,26 @@ Copyright 2018. All rights reserved. Use is subject to license terms.
 import numpy as np
 
 
-def interp1d(x, xf, yf, inc=True, outside=None):
+def interp1d(x, xf, yf, inc=True, outside=None, period=None):
     """
     Wrapper of np.interp, taking into account the decreasing case.
 
     Parameters
     ----------
-    x : array_like
+    x: array_like
         The x-coordinates at which to evaluate the interpolated values.
-    xf : 1-D sequence of floats
+    xf: 1-D sequence of floats
         The x-coordinates of the data points.
-    yf : 1-D sequence of float or complex
+    yf: 1-D sequence of float or complex
         The y-coordinates of the data points, same length as `xp`.
-    inc : boolean
+    inc: boolean
         xf is increasing or decresing.
+    outside: None or float
+        Value to return for x outside xf.
+    period: float
+        A period for the x-coordinates. This parameter allows the proper
+        interpolation of angular x-coordinates. Parameters left and right are
+        ignored if period is specified.
 
     Returns
     ----------
@@ -29,11 +35,14 @@ def interp1d(x, xf, yf, inc=True, outside=None):
         The interpolated values, same shape as `x`.
     """
     # print(f"x : {x.shape} \nxf: {xf.shape} \nyf: {yf.shape}")
+    left  = outside
+    right = outside
+
     if inc: # increasing case
-        re = np.interp(x, xf, yf)
+        re = np.interp(x, xf, yf, left=left, right=right)
     else: # decreasing case
         # print(f"x: {x} \n xf: {xf} \n yf: {yf}")
-        re = np.interp(x, xf[::-1], yf[::-1])
+        re = np.interp(x, xf[::-1], yf[::-1], left=left, right=right)
 
     # print(f"x: {x} \n xf: {xf} \n yf: {yf} \n y: {re}")
 

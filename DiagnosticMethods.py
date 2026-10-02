@@ -34,7 +34,7 @@ class Dynamics(Application):
     """
     Three basic difference operators: divg, curl, grad
     """
-    def divg(self, comps, dims, arakawa=None, iBCs='fixed'):
+    def divg(self, comps, dims, arakawa=None, iBCs='fill'):
         """
         Calculate divergence as du/dx + dv/dy + dw/dz ...
         
@@ -60,7 +60,7 @@ class Dynamics(Application):
                 https://db0nus869y26v.cloudfront.net/en/Arakawa_grids
         iBCs: str or dict of str
             Interior boundary conditions (isolated islands or topographies).
-                e.g., {'X': 'extend', 'Y': 'fixed'}
+                e.g., {'X': 'extend', 'Y': 'fill'}
         """
         if type(comps) is xr.DataArray:
             comps = [comps]
@@ -82,7 +82,7 @@ class Dynamics(Application):
                     for c, d, b in zip(comps, dims, iBCs)])
 
 
-    def vort(self, u=None, v=None, w=None, components='k', arakawa=None, iBCs='fixed'):
+    def vort(self, u=None, v=None, w=None, components='k', arakawa=None, iBCs='fill'):
         """
         Calculate vorticity component.  All the three components satisfy
         the right-hand rule so that we only need one function and input
@@ -112,7 +112,7 @@ class Dynamics(Application):
                 https://db0nus869y26v.cloudfront.net/en/Arakawa_grids
         iBCs: str or dict of str
             Interior boundary conditions (isolated islands or topographies).
-                e.g., {'X': 'extend', 'Y': 'fixed'}
+                e.g., {'X': 'extend', 'Y': 'fill'}
         """
         scheme = self.arakawa if arakawa is None else arakawa
         
@@ -134,16 +134,16 @@ class Dynamics(Application):
                 raise Exception('invalid component ' + str(comp) +
                                 ', only in [k, j, i]')
             
-            if scheme == 'A':
-                vor = self.grid.interp(vor, dim[0])
-                vor = self.grid.interp(vor, dim[1])
+            # if scheme == 'A':
+            #     vor = self.grid.interp(vor, dim[0])
+            #     vor = self.grid.interp(vor, dim[1])
             
             vors.append(vor)
         
         return vors if len(vors) != 1 else vors[0]
 
 
-    def grad(self, T, dims=['X', 'Y'], interp_back=True, arakawa=None, iBCs='fixed'):
+    def grad(self, T, dims=['X', 'Y'], interp_back=True, arakawa=None, iBCs='fill'):
         """
         Calculate spatial gradient components along each dimension given.
         For example:
@@ -164,7 +164,7 @@ class Dynamics(Application):
                 https://db0nus869y26v.cloudfront.net/en/Arakawa_grids
         iBCs: str or dict of str
             Interior boundary conditions (isolated islands or topographies).
-                e.g., {'X': 'extend', 'Y': 'fixed'}
+                e.g., {'X': 'extend', 'Y': 'fill'}
         """
         if type(dims) is str:
             dims = [dims]
@@ -184,7 +184,7 @@ class Dynamics(Application):
         return grds if len(grds) != 1 else grds[0]
 
 
-    def Laplacian(self, var, dims=['X', 'Y'], iBCs='fixed'):
+    def Laplacian(self, var, dims=['X', 'Y'], iBCs='fill'):
         """
         Calculate Laplacian of var as $\nabla^2 q$.  This operator can be
         either 2D or 3D, depending on the dims given.
@@ -198,7 +198,7 @@ class Dynamics(Application):
         """
         # defined at tracer point
         grds = self.grad(var , dims, interp_back=False, iBCs=iBCs)
-        lap  = self.divg(grds, dims, arakawa='C', iBCs='fixed')
+        lap  = self.divg(grds, dims, arakawa='C', iBCs=iBCs)
         
         return lap
     
@@ -316,8 +316,8 @@ class Dynamics(Application):
 
         return KE
     
-
-    def cal_squared_gradient(self, T, dims, boundary=None):
+    
+    def cal_squared_gradient(self, T, dims, boundary=None, iBCs=None):
         """
         Calculate squared gradient magnitude.
         
@@ -334,30 +334,29 @@ class Dynamics(Application):
         grid = self.grid
         
         grd = []
+        boundary = self._overwriteBCs(dims, boundary)
         
-        if boundary == None:
-            boundary = []
+        if iBCs == None:
+            iBCs = [None] * len(dims)
+        elif type(iBCs) is str:
+            iBCs = [iBCs] * len(dims)
+        else:
+            if type(iBCs) != dict and len(iBCs) != len(dims):
+                raise Exception('invalid iBCs, should be None, str, or dict')
         
-        for dim in dims:
-            if dim in boundary:
-                # calculate gradient with half-grid offset
-                tmp = grid.derivative(T, dim, boundary=boundary[dim])
-                
-                # interpolate to get tracer-point gradient magnitude
-                grd.append(grid.interp(tmp**2, dim, boundary=boundary[dim]))
+        for dim, iBC in zip(dims, iBCs):
+            # calculate gradient with half-grid offset
+            if iBC == 'extend':
+                dimN = self._get_dname(T, dim)
+                tmp = grid.derivative(T.ffill(dimN, 2).bfill(dimN, 2), dim,
+                                      boundary=boundary[dim])
             else:
-                # calculate gradient with half-grid offset
-                tmp = grid.derivative(T, dim)
-                
-                # interpolate to get tracer-point gradient magnitude
-                grd.append(grid.interp(tmp**2, dim))
+                tmp = grid.derivative(T, dim, boundary=boundary[dim])
+            
+            # interpolate to get tracer-point gradient magnitude
+            grd.append(grid.interp(tmp**2, dim, boundary=boundary[dim]))
         
-        tmp = grd[0] - grd[0] # set to zero for sumup
-        
-        for g in grd:
-            tmp += g
-        
-        return tmp.rename('grdS'+T.name)
+        return sum(grd).rename('grdS'+T.name)
     
     def divg2(self, u, v, dims=['Y', 'X'], arakawa=None):
         """
@@ -377,7 +376,7 @@ class Dynamics(Application):
             The type of the grid. Reference:
                 https://db0nus869y26v.cloudfront.net/en/Arakawa_grids
         """
-        print('this is deprecated.  Using divg((u,v) dims=[\'Y\',\'X\']) instead')
+        print('divg2 is deprecated.  Using divg((u,v) dims=[\'Y\',\'X\']) instead')
         
         grid = self.grid
         scheme = self.arakawa if arakawa is None else arakawa
@@ -419,7 +418,7 @@ class Dynamics(Application):
             The type of the grid, overwritting the default one. Reference:
                 https://db0nus869y26v.cloudfront.net/en/Arakawa_grids
         """
-        print('this is deprecated.  Using vort(u=u, v=v, components=\'k\') instead')
+        print('curl() is deprecated.  Using vort(u=u, v=v, components=\'k\') instead')
         grid = self.grid
         scheme = self.arakawa if arakawa is None else arakawa
 
@@ -451,7 +450,7 @@ class Dynamics(Application):
     """
     Helper (private) methods are defined below
     """
-    def _divg1D(self, vel, dim, arakawa=None, iBC='fixed'):
+    def _divg1D(self, vel, dim, arakawa=None, iBC='fill'):
         """
         Calculate differences of fluxes as:
         [du * dy*dz/dx,     x-component
@@ -496,31 +495,37 @@ class Dynamics(Application):
                 dname = self._get_dname(VEL, 'X')
                 VEL = VEL.ffill(dname, 1).bfill(dname, 1)
             dy  = get_metric(VEL,'Y')
-            div = grid.diff(VEL * dy, 'X') # weighted by hFacW/hFacS?
+            div = grid.diff(VEL * dy, 'X', boundary=iBC) # weighted by hFacW/hFacS?
             dA  = get_metric(div, ['X', 'Y'])
-            div = div / dA
+            
+            if dy == 1 or dA == 1: # no area metrics and use simple way
+                div = grid.derivative(VEL, 'X', boundary=iBC)
             
         elif dim == 'Y': # metrics may vary along X? partial cell
             if iBC == 'extend':
                 dname = self._get_dname(VEL, 'Y')
                 VEL = VEL.ffill(dname, 1).bfill(dname, 1)
             dx  = get_metric(VEL,'X')
-            div = grid.diff(VEL * dx, 'Y') # weighted by hFacW/hFacS?
+            div = grid.diff(VEL * dx, 'Y', boundary=iBC) # weighted by hFacW/hFacS?
             dA  = get_metric(div, ['X', 'Y'])
             div = div / dA
+            
+            if dx == 1 or dA == 1: # no area metrics and use simple way
+                div = grid.derivative(VEL, 'X', boundary=iBC)
             
         elif dim == 'Z': # metrics may vary along z?
             if iBC == 'extend':
                 dname = self._get_dname(VEL, 'Z')
                 VEL = VEL.ffill(dname, 1).bfill(dname, 1)
-            div = grid.diff(VEL, 'Z')
-            dz  = get_metric(div, 'Z')
-            div = div / dz
+            # div = grid.diff(VEL, 'Z', boundary=iBC)
+            # dz  = get_metric(div, 'Z')
+            # div = div / dz
+            div = grid.derivative(VEL, 'Z', boundary=iBC)
         
         return div
 
     def _vort2D(self, v, u, dims=['X', 'Y'], interp_back=True, arakawa=None,
-                iBCs='fixed'):
+                iBCs='fill'):
         """
         Calculate vorticity component.  All the three components satisfy
         the right-hand rule so that we only need one function and input
@@ -545,7 +550,7 @@ class Dynamics(Application):
                 https://db0nus869y26v.cloudfront.net/en/Arakawa_grids
         iBCs: str or dict of str
             Interior boundary conditions (isolated islands or topographies).
-                e.g., {'X': 'extend', 'Y': 'fixed'}
+                e.g., {'X': 'extend', 'Y': 'fill'}
         """
         grid = self.grid
         scheme = self.arakawa if arakawa is None else arakawa
@@ -592,7 +597,7 @@ class Dynamics(Application):
         return vor
 
 
-    def _grad1D(self, var, dim, interp_back=True, arakawa=None, iBC='fixed'):
+    def _grad1D(self, var, dim, interp_back=True, arakawa=None, iBC='fill'):
         """
         Calculate spatial gradient component along a given dimension.
         This is different from _divg1D as it does not requires proper
@@ -660,6 +665,28 @@ class Dynamics(Application):
                 return coords[coord]
         
         raise Exception('no dim name for '+str(dim))
+    
+    def _overwriteBCs(self, dims, BCsNew):
+        BCsOld = {dim:self.grid.axes[dim].boundary for dim in dims}
+        
+        for b in BCsOld:
+            if BCsOld[b] is None:
+                BCsOld[b] = 'periodic' # replace None with 'periodic'
+        
+        if BCsNew is None:
+            return BCsOld
+        
+        BCs = BCsOld.copy()
+        
+        if type(BCsNew) == str:
+            BC = BCsNew
+            
+            for B in BCsOld:
+                BCs[B] = BC
+            
+            return BCs
+        else:
+            return BCsNew
         
 
 

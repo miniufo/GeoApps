@@ -29,7 +29,7 @@ def add_latlon_metrics(dset, dims=None, boundary=None):
     dset : xarray.Dataset
         A dataset open from a file
     dims : dict
-        Dimension pair in a dict, e.g., {'lat':'latitude', 'lon':'longitude'}
+        Dimension pair in a dict, e.g., {'Y':'latitude', 'X':'longitude'}
     boundary : dict
         Default boundary conditions applied to each coordinate
 
@@ -44,17 +44,17 @@ def add_latlon_metrics(dset, dims=None, boundary=None):
     
     if dims is None:
         for dim in dimXList:
-            if dim in dset or dim in dset.coords:
+            if dim in dset.dims:
                 lon = dim
                 break
 
         for dim in dimYList:
-            if dim in dset or dim in dset.coords:
+            if dim in dset.dims:
                 lat = dim
                 break
 
         for dim in dimZList:
-            if dim in dset or dim in dset.coords:
+            if dim in dset.dims:
                 lev = dim
                 break
 
@@ -65,7 +65,7 @@ def add_latlon_metrics(dset, dims=None, boundary=None):
         lon = dims['X'] if 'X' in dims else None
         lat = dims['Y'] if 'Y' in dims else None
         lev = dims['Z'] if 'Z' in dims else None
-
+    
     if lev is None:
         ds = generate_grid_ds(dset, {'X':lon, 'Y':lat})
     else:
@@ -107,8 +107,8 @@ def add_latlon_metrics(dset, dims=None, boundary=None):
         dlonC = grid.diff(lonC, 'X')
         dlonG = grid.diff(lonG, 'X')
     else:
-        dlonC = grid.diff(lonC, 'X', boundary='extrapolate')
-        dlonG = grid.diff(lonG, 'X', boundary='extrapolate')
+        dlonC = grid.diff(lonC, 'X', boundary='extend')
+        dlonG = grid.diff(lonG, 'X', boundary='extend')
     
     dlatC = grid.diff(latC, 'Y')
     dlatG = grid.diff(latG, 'Y')
